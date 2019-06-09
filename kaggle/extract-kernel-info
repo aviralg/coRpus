@@ -1,0 +1,77 @@
+#!/usr/bin/env Rscript
+
+library(tidyverse)
+library(rvest)
+library(progress)
+library(optparse)
+library(fs)
+library(rlang)
+
+
+extract_kernel_info <- function(settings) {
+
+    extract_kernel_url <- function(html) {
+        html %>%
+            html_nodes(".block-link__anchor") %>%
+            html_attr("href")
+    }
+
+    kernel_info_webpages_filepaths <- dir_ls(settings$kernel_info_webpages_dirpath,
+                                    glob = "*.html", recurse = FALSE)
+
+    kernel_urls <-
+        kernel_info_webpages_filepaths %>%
+        map(compose(extract_kernel_url, read_html)) %>%
+        flatten_chr() %>%
+        unique()
+
+    kernel_id_index <- nchar("https://www.kaggle.com/") + 1
+
+    kernel_ids <- str_sub(kernel_urls, start = kernel_id_index, end = -1)
+
+    kernel_info <-
+        tibble(id = kernel_ids) %>%
+        separate(id, c("user_name", "kernel_name"), sep = "/") %>%
+        add_column(url = kernel_urls, id = kernel_ids, .before = 1)
+
+    kernel_info
+}
+
+
+parse_settings <- function(args) {
+
+    usage <- "%prog kernel-info-webpages-dirpath kernel-info-filepath"
+
+    description <- paste(
+        "kernel-info-webpages-dirpath  directory containing kaggle.com/kernels web pages",
+        "kernel-info-filepath          file to which kernel urls will be exported",
+        sep = "\n")
+
+    option_parser <- OptionParser(usage = usage,
+                                  description = description,
+                                  add_help_option = TRUE,
+                                  option_list = list())
+
+    arguments <- parse_args2(option_parser, args)
+
+    list(kernel_info_webpages_dirpath = arguments$args[1],
+         kernel_info_filepath = arguments$args[2])
+
+}
+
+
+main <- function() {
+
+    settings <- parse_settings(args = commandArgs(trailingOnly = TRUE))
+
+    kernel_info <- extract_kernel_info(settings)
+
+    write_csv(kernel_info, settings$kernel_info_filepath)
+
+    cat(sprintf("Extracted %d kernel urls to %s\n", nrow(kernel_info), settings$kernel_info_filepath))
+
+    invisible(NULL)
+}
+
+
+main()

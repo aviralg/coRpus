@@ -1,0 +1,157 @@
+#!/usr/bin/env Rscript
+
+library(tidyverse)
+library(rvest)
+library(progress)
+library(optparse)
+library(fs)
+library(rlang)
+library(processx)
+
+
+download_kernel_script <- function(id, dirpath) {
+
+    result <-
+        processx::run("kaggle", c("kernels", "pull", "--metadata", "--path", dirpath, id)) %>%
+        as_tibble() %>%
+        add_column(id = id, .before = 1)
+
+    result
+}
+
+
+download_kernel_webpage <- function(url, filepath) {
+    contents <- read_file(url)
+
+    dir_create(path_dir(filepath))
+
+    write_file(contents, filepath)
+
+    read_html(contents)
+}
+
+
+download_code <- function(url, id, user_name, kernel_name, settings, pb) {
+
+    kernel_dirpath <- path(settings$kernel_dirpath, str_c(user_name, kernel_name, sep = "-"))
+
+    dir_create(kernel_dirpath)
+
+    tryCatch({
+
+        write_file(as.character(Sys.time()), path(kernel_dirpath, "BEGIN"))
+
+        download_kernel_webpage(url, path(kernel_dirpath, "webpage", kernel_name, ext = "html"))
+
+        result <- download_kernel_script(id, path(kernel_dirpath, "script"))
+
+        write_csv(result, path(kernel_dirpath, "SUCCESS"))
+
+        return(result)
+    },
+
+    error = function(e) {
+
+        result <- tibble(id = id, status = -1, stdout = "", stderr = e, timeout = FALSE)
+
+        write_csv(result, path(kernel_dirpath, "ERROR"))
+
+        return(result)
+    },
+
+    finally = {
+
+        write_file(as.character(Sys.time()), path(kernel_dirpath, "FINISH"))
+
+        pb$tick(tokens = list(kernel_id = id))
+
+        Sys.sleep(settings$delay)
+
+    })
+}
+
+
+download_kernel_code <- function(settings, kernel_info) {
+
+    pb <- progress_bar$new(format = ":kernel_id [:bar] :current/:total [:percent] :eta",
+                           total = nrow(kernel_info),
+                           clear = FALSE,
+                           width = 120)
+    pb$tick(0)
+
+    status <-
+        pmap_dfr(kernel_info, download_code, settings, pb) %>%
+        bind_rows()
+
+    status
+}
+
+
+get_kernel_info <- function(settings) {
+
+    kernel_info <- read_csv(settings$kernel_info_filepath)
+
+    kernel_count <- nrow(kernel_info)
+
+    kernel_count_per_part <- kernel_count %/% settings$part_count
+
+    start_index <- 1 + kernel_count_per_part * (settings$part_index - 1)
+
+    end_index <- if (settings$part_index == settings$part_count) {
+                     kernel_count
+                 }
+                 else {
+                     kernel_count_per_part + start_index - 1
+                 }
+
+    slice(kernel_info, seq2(start_index, end_index))
+}
+
+
+parse_settings <- function(args) {
+
+    usage <- "%prog kernel-table-filepath part-count part-index delay kernel-dirpath download-status-filepath"
+
+    description <- paste(
+        "kernel-info-filepath           file containing kernel info",
+        "part-count                     number of parts in which to split the kernel info table",
+        "part-index                     part of kernel info table which needs to be downloaded",
+        "delay                          delay in seconds between successive kernel downloads",
+        "kernel-dirpath                 directory to which kernels will be downloaded",
+        "code-download-status-filepath  file containing download status of kernel code",
+        sep = "\n")
+
+    option_parser <- OptionParser(usage = usage,
+                                  description = description,
+                                  add_help_option = TRUE,
+                                  option_list = list())
+
+    arguments <- parse_args2(option_parser, args)
+
+    list(kernel_info_filepath = arguments$args[1],
+         part_count = as.integer(arguments$args[2]),
+         part_index = as.integer(arguments$args[3]),
+         delay = as.integer(arguments$args[4]),
+         kernel_dirpath = arguments$args[5],
+         code_download_status_filepath = arguments$args[6])
+
+}
+
+
+main <- function() {
+
+    settings <- parse_settings(args = commandArgs(trailingOnly = TRUE))
+
+    kernel_info <- get_kernel_info(settings)
+
+    cat(sprintf("Downlading %d kernel codes to %s\n", nrow(kernel_info), settings$kernel_dirpath))
+
+    status <- download_kernel_code(settings, kernel_info)
+
+    write_csv(status, settings$code_download_status_filepath)
+
+    invisible(NULL)
+}
+
+
+main()
