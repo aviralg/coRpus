@@ -11,9 +11,14 @@ library(rlang)
 extract_kernel_info <- function(settings) {
 
     extract_kernel_url <- function(html) {
-        html %>%
+        urls <-
+            html %>%
             html_nodes(".block-link__anchor") %>%
             html_attr("href")
+
+        print(length(urls))
+
+        urls
     }
 
     kernel_info_webpages_filepaths <- dir_ls(settings$kernel_info_webpages_dirpath,
@@ -21,6 +26,7 @@ extract_kernel_info <- function(settings) {
 
     kernel_urls <-
         kernel_info_webpages_filepaths %>%
+        print() %>%
         map(compose(extract_kernel_url, read_html)) %>%
         flatten_chr() %>%
         unique()

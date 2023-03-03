@@ -104,6 +104,10 @@ get_kernel_info <- function(settings) {
                      kernel_count_per_part + start_index - 1
                  }
 
+    print(start_index)
+
+    print(end_index)
+
     slice(kernel_info, seq2(start_index, end_index))
 }
 
